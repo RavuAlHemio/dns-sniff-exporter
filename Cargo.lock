@@ -89,7 +89,9 @@ dependencies = [
 name = "dns-sniff-exporter"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "clap",
+ "from-to-repr",
  "macaddr",
  "pcap",
 ]
@@ -113,6 +115,17 @@ checksum = "aa68f1b12764fab894d2755d2518754e71b4fd80ecfb822714a1206c2aab39bf"
 dependencies = [
  "cc",
  "libc",
+]
+
+[[package]]
+name = "from-to-repr"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dd5c7d3bed8bde25e3113b097772935f126cc1021c3545c7bc5821a5c3f4f7d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

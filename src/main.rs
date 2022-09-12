@@ -1,5 +1,8 @@
+mod bytes;
+mod dns;
 mod ethernet;
 mod ip;
+mod tcp_udp;
 
 
 use clap::Parser;

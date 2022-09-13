@@ -2,16 +2,25 @@ mod bytes;
 mod dns;
 mod ethernet;
 mod ip;
+mod packet;
 mod tcp_udp;
 
 
+use std::time::{Duration, Instant};
+
 use clap::Parser;
-use pcap::{Capture, Device, Error as PcapError};
+use pcap::Device;
+use tokio::sync::mpsc;
+use tracing::error;
+
+use crate::packet::OwnedPacket;
 
 
 #[derive(Parser)]
 struct Opts {
     interface_index: Option<usize>,
+    #[clap(default_value = "32")] buffer_size: usize,
+    #[clap(default_value = "60")] sample_secs: u64,
 }
 
 
@@ -54,47 +63,29 @@ fn hexdump(bs: &[u8]) {
 }
 
 
-fn main() {
-    let opts = Opts::parse();
+#[tokio::main]
+async fn main() {
+    // set up tracing
+    let (stdout_non_blocking, _guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
+        .lossy(false)
+        .finish(std::io::stdout());
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(stdout_non_blocking)
+        .init();
 
-    // get devices
-    let mut device_list = Device::list()
-        .expect("failed to get device list");
-    if device_list.len() == 0 {
-        panic!("no capture devices available");
-    }
+    // parse options
+    let opts = Opts::parse();
 
     let interface_index = match opts.interface_index {
         Some(ii) => ii,
         None => {
+            let mut device_list = Device::list()
+                .expect("failed to obtain device list");
             for (i, device) in device_list.into_iter().enumerate() {
                 println!("{}: {}", i, device.desc.as_ref().map(|d| d.as_str()).unwrap_or(device.name.as_str()));
             }
             return;
         },
     };
-    if interface_index >= device_list.len() {
-        panic!("interface index {} too large for number of devices ({})", interface_index, device_list.len());
-    }
-
-    let dev = device_list.swap_remove(interface_index);
-    eprintln!("will capture on {}", dev.desc.as_ref().map(|d| d.as_str()).unwrap_or(dev.name.as_str()));
-    let cap_inact = Capture::from_device(dev)
-        .expect("failed to convert capture device")
-        .timeout(1000);
-    let mut cap = cap_inact
-        .open().expect("failed to open capture device");
-    cap.filter("udp port 53", true)
-        .expect("failed to set capture device filter");
-    println!("datalink is {:?}", cap.get_datalink());
-
-    loop {
-        let packet = match cap.next_packet() {
-            Ok(p) => p,
-            Err(PcapError::TimeoutExpired) => continue,
-            Err(_) => break,
-        };
-        println!("{:?}", packet.header);
-        hexdump(&packet.data);
-    }
 }

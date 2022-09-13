@@ -34,6 +34,8 @@ impl TcpHeader {
                 return None;
             }
 
+            // TODO: verify checksum
+
             let flags = TcpFlags::from_bits(bytes[13]).unwrap();
             let window = u16::from_be_bytes(bytes[14..16].try_into().unwrap());
             let checksum = u16::from_be_bytes(bytes[16..18].try_into().unwrap());
@@ -96,6 +98,8 @@ impl UdpHeader {
             let destination_port = u16::from_be_bytes(bytes[2..4].try_into().unwrap());
             let length = u16::from_be_bytes(bytes[4..6].try_into().unwrap());
             let checksum = u16::from_be_bytes(bytes[6..8].try_into().unwrap());
+
+            // TODO: verify checksum
 
             let header = Self {
                 source_port,

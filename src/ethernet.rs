@@ -36,13 +36,13 @@ pub const ETHERTYPE_IPV6: u16 = 0x86DD;
 
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct VlanTag {
+pub struct VlanTagHeader {
     pub priority_code_point: PriorityCodePoint,
     pub drop_eligible_indicator: bool,
     pub vlan_id: u16,
     pub ethertype: u16,
 }
-impl VlanTag {
+impl VlanTagHeader {
     pub fn try_take(bytes: &[u8]) -> Option<(Self, &[u8])> {
         if bytes.len() < 4 {
             None

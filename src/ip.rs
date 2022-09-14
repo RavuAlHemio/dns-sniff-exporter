@@ -1,6 +1,7 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::bytes::TryFromBytes;
+use crate::packet::PacketDissection;
 
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -21,67 +22,77 @@ pub struct Ipv4Header {
     pub options: [Option<[u8; 4]>; 10], // up to 10 words of 32 bits each
 }
 impl Ipv4Header {
-    pub fn try_take(bytes: &[u8]) -> Option<(Self, &[u8])> {
+    pub fn try_take(bytes: &[u8]) -> PacketDissection<Self> {
         if bytes.len() < 20 {
-            None
-        } else {
-            let version = (bytes[0] & 0b1111_0000) >> 4;
-            if version != 4 {
-                return None;
-            }
-
-            let header_length_w32 = bytes[0] & 0b0000_1111;
-            let header_length_bytes = usize::from(header_length_w32) * (32 / 8);
-            if header_length_bytes < 20 {
-                return None;
-            }
-            if bytes.len() < header_length_bytes {
-                return None;
-            }
-
-            // TODO: verify checksum
-
-            let type_of_service = bytes[1];
-            let total_length = u16::from_be_bytes(bytes[2..4].try_into().unwrap());
-            let identification = u16::from_be_bytes(bytes[4..6].try_into().unwrap());
-            let flags_and_fragment_offset = u16::from_be_bytes(bytes[6..8].try_into().unwrap());
-            let time_to_live = bytes[8];
-            let protocol = bytes[9];
-            let header_checksum = u16::from_be_bytes(bytes[10..12].try_into().unwrap());
-            let source_address = Ipv4Addr::try_from_bytes(&bytes[12..16]).unwrap();
-            let destination_address = Ipv4Addr::try_from_bytes(&bytes[16..20]).unwrap();
-
-            let mut options = [None; 10];
-            let mut i = 0;
-            while 20 + (i * 4) < header_length_bytes {
-                options[i] = Some(bytes[20+(i*4)..20+(i*4)+4].try_into().unwrap());
-                i += 1;
-            }
-
-            let header = Self {
-                version,
-                type_of_service,
-                total_length,
-                identification,
-                flags_and_fragment_offset,
-                time_to_live,
-                protocol,
-                header_checksum,
-                source_address,
-                destination_address,
-                options,
-            };
-            Some((header, &bytes[header_length_bytes..]))
+            return PacketDissection::TooShort;
         }
+
+        let version = (bytes[0] & 0b1111_0000) >> 4;
+        if version != 4 {
+            return PacketDissection::WrongType;
+        }
+
+        let header_length_w32 = bytes[0] & 0b0000_1111;
+        let header_length_bytes = usize::from(header_length_w32) * (32 / 8);
+        if header_length_bytes < 20 {
+            return PacketDissection::TooShort;
+        }
+        if bytes.len() < header_length_bytes {
+            return PacketDissection::TooShort;
+        }
+
+        let full_checksum = internet_checksum(bytes[0..header_length_bytes].iter().map(|b| *b));
+        if full_checksum != 0xFFFF {
+            return PacketDissection::IncorrectChecksum;
+        }
+
+        let type_of_service = bytes[1];
+        let total_length = u16::from_be_bytes(bytes[2..4].try_into().unwrap());
+        let identification = u16::from_be_bytes(bytes[4..6].try_into().unwrap());
+        let flags_and_fragment_offset = u16::from_be_bytes(bytes[6..8].try_into().unwrap());
+        let time_to_live = bytes[8];
+        let protocol = bytes[9];
+        let header_checksum = u16::from_be_bytes(bytes[10..12].try_into().unwrap());
+        let source_address = Ipv4Addr::try_from_bytes(&bytes[12..16]).unwrap();
+        let destination_address = Ipv4Addr::try_from_bytes(&bytes[16..20]).unwrap();
+
+        let mut options = [None; 10];
+        let mut i = 0;
+        while 20 + (i * 4) < header_length_bytes {
+            options[i] = Some(bytes[20+(i*4)..20+(i*4)+4].try_into().unwrap());
+            i += 1;
+        }
+
+        let header = Self {
+            version,
+            type_of_service,
+            total_length,
+            identification,
+            flags_and_fragment_offset,
+            time_to_live,
+            protocol,
+            header_checksum,
+            source_address,
+            destination_address,
+            options,
+        };
+        PacketDissection::Success { header, rest: &bytes[header_length_bytes..] }
     }
 
     /// Returns the representation of this IPv4 header as the pseudo-header which is "mixed into"
     /// TCP and UDP checksum calculation.
     ///
     /// The pseudo-header is defined in RFC9293 (TCP) for IPv4.
-    pub fn to_pseudo_header(&self, l4_length: u16) -> [u8; 12] {
+    pub fn to_pseudo_header(&self) -> [u8; 12] {
         let src_addr_bytes = self.source_address.octets();
         let dest_addr_bytes = self.destination_address.octets();
+
+        let mut l4_length = self.total_length - 20;
+        for option in &self.options {
+            if option.is_some() {
+                l4_length -= 4;
+            }
+        }
         let l4_length_bytes = l4_length.to_be_bytes();
 
         let mut pseudo_header = [0u8; 12];
@@ -126,49 +137,52 @@ pub struct Ipv6Header {
     pub destination_address: Ipv6Addr,
 }
 impl Ipv6Header {
-    pub fn try_take(bytes: &[u8]) -> Option<(Self, &[u8])> {
+    pub fn try_take(bytes: &[u8]) -> PacketDissection<Self> {
         if bytes.len() < 40 {
-            None
-        } else {
-            let first_field = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
-
-            let version = ((first_field & 0b11110000_00000000_00000000_00000000) >> 28).try_into().unwrap();
-            if version != 6 {
-                return None;
-            }
-            let traffic_class = ((first_field & 0b00001111_11110000_00000000_00000000) >> 20).try_into().unwrap();
-            let flow_label = first_field & 0b00000000_00001111_11111111_11111111;
-
-            let payload_length = u16::from_be_bytes(bytes[4..6].try_into().unwrap());
-            let next_header = bytes[6];
-            let hop_limit = bytes[7];
-
-            let source_address = Ipv6Addr::try_from_bytes(&bytes[8..24]).unwrap();
-            let destination_address = Ipv6Addr::try_from_bytes(&bytes[24..40]).unwrap();
-
-            let header = Self {
-                version,
-                traffic_class,
-                flow_label,
-                payload_length,
-                next_header,
-                hop_limit,
-                source_address,
-                destination_address,
-            };
-            Some((header, &bytes[40..]))
+            return PacketDissection::TooShort;
         }
-    }
 
-    // IPv6 has no built-in checksum; the responsibility is left to layer-4 protocols.
+        let first_field = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
+
+        let version = ((first_field & 0b11110000_00000000_00000000_00000000) >> 28).try_into().unwrap();
+        if version != 6 {
+            return PacketDissection::WrongType;
+        }
+        let traffic_class = ((first_field & 0b00001111_11110000_00000000_00000000) >> 20).try_into().unwrap();
+        let flow_label = first_field & 0b00000000_00001111_11111111_11111111;
+
+        let payload_length = u16::from_be_bytes(bytes[4..6].try_into().unwrap());
+        let next_header = bytes[6];
+        let hop_limit = bytes[7];
+
+        // IPv6 has no built-in checksum; the responsibility is left to layer-4 protocols
+
+        let source_address = Ipv6Addr::try_from_bytes(&bytes[8..24]).unwrap();
+        let destination_address = Ipv6Addr::try_from_bytes(&bytes[24..40]).unwrap();
+
+        let header = Self {
+            version,
+            traffic_class,
+            flow_label,
+            payload_length,
+            next_header,
+            hop_limit,
+            source_address,
+            destination_address,
+        };
+
+        PacketDissection::Success { header, rest: &bytes[40..] }
+    }
 
     /// Returns the representation of this IPv6 header as the pseudo-header which is "mixed into"
     /// TCP and UDP checksum calculation.
     ///
     /// The pseudo-header is defined in RFC8200 (IPv6) for IPv6.
-    pub fn to_pseudo_header(&self, l4_length: u32) -> [u8; 40] {
+    pub fn to_pseudo_header(&self) -> [u8; 40] {
         let src_addr_bytes = self.source_address.octets();
         let dest_addr_bytes = self.destination_address.octets();
+
+        let l4_length: u32 = (self.payload_length - 40).into();
         let l4_length_bytes = l4_length.to_be_bytes();
 
         let mut pseudo_header = [0u8; 40];
@@ -192,6 +206,35 @@ impl Default for Ipv6Header {
             hop_limit: Default::default(),
             source_address: Ipv6Addr::UNSPECIFIED,
             destination_address: Ipv6Addr::UNSPECIFIED,
+        }
+    }
+}
+
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum IpHeader {
+    V4(Ipv4Header),
+    V6(Ipv6Header),
+}
+impl IpHeader {
+    pub fn inner_protocol(&self) -> u8 {
+        match self {
+            Self::V4(h) => h.protocol,
+            Self::V6(h) => h.next_header,
+        }
+    }
+
+    pub fn to_pseudo_header(&self) -> ([u8; 40], usize) {
+        match self {
+            Self::V4(h) => {
+                let mut buf = [0u8; 40];
+                let ph = h.to_pseudo_header();
+                buf[0..12].copy_from_slice(&ph);
+                (buf, 12)
+            },
+            Self::V6(h) => {
+                (h.to_pseudo_header(), 40)
+            },
         }
     }
 }

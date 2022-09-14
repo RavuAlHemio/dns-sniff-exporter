@@ -8,7 +8,8 @@ use tracing::{debug, error, warn};
 use crate::ethernet::{
     EthernetHeader, ETHERTYPE_IPV4, ETHERTYPE_IPV6, ETHERTYPE_VLAN_TAG, VlanTagHeader,
 };
-use crate::ip::{Ipv4Header, Ipv6Header};
+use crate::ip::{IpHeader, Ipv4Header, Ipv6Header, PROTO_UDP};
+use crate::tcp_udp::UdpHeader;
 
 
 pub struct OwnedPacket {
@@ -25,9 +26,11 @@ impl<'a> From<Packet<'a>> for OwnedPacket {
 }
 
 
+#[derive(Debug)]
 pub enum PacketDissection<'a, H> {
     Success { header: H, rest: &'a [u8] },
     TooShort,
+    WrongType,
     IncorrectChecksum,
 }
 
@@ -107,9 +110,9 @@ pub async fn collect_sample(
     while let Some(packet) = packet_receiver.recv().await {
         // FIXME: assuming Ethernet Layer-2 encapsulation
         let (eth, rest) = match EthernetHeader::try_take(&packet.data) {
-            Some(pr) => pr,
-            None => {
-                warn!("non-Ethernet frame slipped through the cracks: {:?}", packet.data.as_slice());
+            PacketDissection::Success { header, rest } => (header, rest),
+            other => {
+                warn!("non-Ethernet frame slipped through the cracks ({:?}): {:?}", other, packet.data.as_slice());
                 continue;
             },
         };
@@ -118,17 +121,17 @@ pub async fn collect_sample(
             ETHERTYPE_VLAN_TAG => {
                 // try to unpack
                 let (_tag, rest) = match VlanTagHeader::try_take(&rest) {
-                    Some(pr) => pr,
-                    None => {
-                        warn!("VLAN-tagged Ethernet frame but failed to extract header: {:?}", packet.data.as_slice());
+                    PacketDissection::Success { header, rest } => (header, rest),
+                    other => {
+                        warn!("VLAN-tagged Ethernet frame but failed to extract header ({:?}): {:?}", other, packet.data.as_slice());
                         continue;
                     },
                 };
 
                 let (inner_eth, rest) = match EthernetHeader::try_take(rest) {
-                    Some(pr) => pr,
-                    None => {
-                        warn!("VLAN tag detected but failed to decode inner Ethernet payload: {:?}", packet.data.as_slice());
+                    PacketDissection::Success { header, rest } => (header, rest),
+                    other => {
+                        warn!("VLAN tag detected but failed to decode inner Ethernet payload ({:?}): {:?}", other, packet.data.as_slice());
                         continue;
                     },
                 };
@@ -153,30 +156,47 @@ pub async fn collect_sample(
             continue;
         }
         let ip_version = (ip_bytes[0] & 0b1111_0000) >> 4;
-        match ip_version {
+        let (ip_header, rest) = match ip_version {
             4 => {
-                let (ip_header, rest) = match Ipv4Header::try_take(ip_bytes) {
-                    Some(pr) => pr,
-                    None => {
-                        warn!("failed to parse IPv4 header of: {:?}", packet.data.as_slice());
+                match Ipv4Header::try_take(ip_bytes) {
+                    PacketDissection::Success { header, rest } => (IpHeader::V4(header), rest),
+                    other => {
+                        warn!("failed to parse IPv4 header ({:?}) of {:?}", other, packet.data.as_slice());
                         continue;
                     },
-                };
+                }
             },
             6 => {
-                let (ip_header, rest) = match Ipv6Header::try_take(ip_bytes) {
-                    Some(pr) => pr,
-                    None => {
-                        warn!("failed to parse IPv6 header of: {:?}", packet.data.as_slice());
+                match Ipv6Header::try_take(ip_bytes) {
+                    PacketDissection::Success { header, rest } => (IpHeader::V6(header), rest),
+                    other => {
+                        warn!("failed to parse IPv6 header ({:?}) of {:?}", other, packet.data.as_slice());
                         continue;
                     },
-                };
+                }
             },
             other => {
                 warn!("Ethernet frame with IP packet with unexpected version {} slipped through the cracks: {:?}", other, packet.data.as_slice());
                 continue;
             },
+        };
+
+        // FIXME: TCP?
+        if ip_header.inner_protocol() != PROTO_UDP {
+            warn!("Ethernet frame with IP packet with unexpected inner protocol {} slipped through the cracks: {:?}", ip_header.inner_protocol(), packet.data.as_slice());
+            continue;
         }
+
+        let (pseudo_header_bytes, pseudo_header_length) = ip_header.to_pseudo_header();
+        let (udp_header, rest) = match UdpHeader::try_take(rest, &pseudo_header_bytes[0..pseudo_header_length]) {
+            PacketDissection::Success { header, rest } => (header, rest),
+            other => {
+                warn!("failed to parse UDP header ({:?}) of {:?}", other, packet.data.as_slice());
+                continue;
+            },
+        };
+
+        // TODO: dissect DNS
     }
 
     if let Err(e) = packet_handler_handle.await {

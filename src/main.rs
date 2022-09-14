@@ -1,19 +1,13 @@
 mod bytes;
-mod dns;
 mod ethernet;
 mod ip;
 mod packet;
+mod stats;
 mod tcp_udp;
 
 
-use std::time::{Duration, Instant};
-
 use clap::Parser;
 use pcap::Device;
-use tokio::sync::mpsc;
-use tracing::error;
-
-use crate::packet::OwnedPacket;
 
 
 #[derive(Parser)]

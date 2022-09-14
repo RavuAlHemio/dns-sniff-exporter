@@ -4,6 +4,8 @@ use std::time::{Duration, Instant};
 use pcap::{Capture, Device, Error as PcapError, Packet, PacketHeader};
 use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
+use trust_dns_proto::op::{Message, MessageType};
+use trust_dns_proto::serialize::binary::BinDecodable;
 
 use crate::ethernet::{
     EthernetHeader, ETHERTYPE_IPV4, ETHERTYPE_IPV6, ETHERTYPE_VLAN_TAG, VlanTagHeader,
@@ -188,7 +190,7 @@ pub async fn collect_sample(
         }
 
         let (pseudo_header_bytes, pseudo_header_length) = ip_header.to_pseudo_header();
-        let (udp_header, rest) = match UdpHeader::try_take(rest, &pseudo_header_bytes[0..pseudo_header_length]) {
+        let (_udp_header, rest) = match UdpHeader::try_take(rest, &pseudo_header_bytes[0..pseudo_header_length]) {
             PacketDissection::Success { header, rest } => (header, rest),
             other => {
                 warn!("failed to parse UDP header ({:?}) of {:?}", other, packet.data.as_slice());
@@ -196,7 +198,26 @@ pub async fn collect_sample(
             },
         };
 
-        // TODO: dissect DNS
+        let dns = match Message::from_bytes(rest) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("failed to decode DNS packet {:?}: {}", packet.data.as_slice(), e);
+                continue;
+            },
+        };
+
+        let timestamp = packet.header.ts;
+
+        // we are interested in query type and name of requests
+        if dns.message_type() != MessageType::Query {
+            continue;
+        }
+        for query in dns.queries() {
+            let query_type = query.query_type();
+            let name = query.name();
+
+            // TODO: store this
+        }
     }
 
     if let Err(e) = packet_handler_handle.await {

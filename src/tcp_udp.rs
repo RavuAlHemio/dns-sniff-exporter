@@ -2,7 +2,7 @@ use std::convert::TryInto;
 
 use bitflags::bitflags;
 
-use crate::ip::{internet_checksum, IpHeader};
+use crate::ip::internet_checksum;
 use crate::packet::PacketDissection;
 
 
@@ -43,7 +43,7 @@ impl TcpHeader {
 
         let full_checksum = internet_checksum(
             pseudo_header.iter().map(|b| *b)
-                .chain(bytes[0..data_offset_bytes].iter().map(|b| *b))
+                .chain(bytes.iter().map(|b| *b))
         );
         if full_checksum != 0xFFFF {
             return PacketDissection::IncorrectChecksum;
@@ -114,7 +114,7 @@ impl UdpHeader {
 
         let full_checksum = internet_checksum(
             pseudo_header.iter().map(|b| *b)
-                .chain(bytes[0..8].iter().map(|b| *b))
+                .chain(bytes.iter().map(|b| *b))
         );
         if full_checksum != 0xFFFF {
             return PacketDissection::IncorrectChecksum;

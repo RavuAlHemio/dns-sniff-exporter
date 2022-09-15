@@ -2,12 +2,17 @@ mod bytes;
 mod ethernet;
 mod ip;
 mod packet;
+mod sampling;
 mod stats;
 mod tcp_udp;
 
 
+use std::time::Duration;
+
 use clap::Parser;
 use pcap::Device;
+
+use crate::sampling::collect_sample;
 
 
 #[derive(Parser)]
@@ -74,7 +79,7 @@ async fn main() {
     let interface_index = match opts.interface_index {
         Some(ii) => ii,
         None => {
-            let mut device_list = Device::list()
+            let device_list = Device::list()
                 .expect("failed to obtain device list");
             for (i, device) in device_list.into_iter().enumerate() {
                 println!("{}: {}", i, device.desc.as_ref().map(|d| d.as_str()).unwrap_or(device.name.as_str()));
@@ -82,4 +87,14 @@ async fn main() {
             return;
         },
     };
+
+    // run a single sniffing session
+    let sample = collect_sample(
+        interface_index,
+        Duration::from_secs(opts.sample_secs),
+        Some("udp port 53"),
+        Some(opts.buffer_size),
+    ).await
+        .expect("failed to collect sample");
+    println!("{:#?}", sample);
 }

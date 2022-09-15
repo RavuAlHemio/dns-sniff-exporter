@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use crate::bytes::TryFromBytes;
 use crate::packet::PacketDissection;
@@ -237,6 +237,20 @@ impl IpHeader {
             },
         }
     }
+
+    pub fn destination_address(&self) -> IpAddr {
+        match self {
+            Self::V4(h) => IpAddr::V4(h.destination_address),
+            Self::V6(h) => IpAddr::V6(h.destination_address),
+        }
+    }
+
+    pub fn source_address(&self) -> IpAddr {
+        match self {
+            Self::V4(h) => IpAddr::V4(h.source_address),
+            Self::V6(h) => IpAddr::V6(h.source_address),
+        }
+    }
 }
 
 
@@ -251,7 +265,7 @@ pub const PROTO_UDP: u8 = 17;
 /// adding carry bits as the least significant bit to the result.
 #[inline]
 pub fn ones_complement_add(a: u16, b: u16) -> u16 {
-    let (mut sum, mut carry) = a.overflowing_add(b);
+    let (mut sum, carry) = a.overflowing_add(b);
     // worst case: 0xFFFF + 0xFFFF = 0x1FFFE (overflows)
     // => 0xFFFE + 0x0001 = 0xFFFF (does not overflow)
     // => no need to worry about carry more than once
@@ -288,8 +302,8 @@ pub fn internet_checksum<I: IntoIterator<Item = u8>>(bytes: I) -> u16 {
     if checksum == 0xFFFF {
         0xFFFF
     } else {
-    // actual ones' complement
-    checksum ^ 0xFFFF
+        // actual ones' complement
+        checksum ^ 0xFFFF
     }
 }
 

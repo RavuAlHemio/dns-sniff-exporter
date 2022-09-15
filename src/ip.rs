@@ -285,6 +285,31 @@ pub fn internet_checksum<I: IntoIterator<Item = u8>>(bytes: I) -> u16 {
         checksum = ones_complement_add(checksum, word);
     }
 
+    if checksum == 0xFFFF {
+        0xFFFF
+    } else {
     // actual ones' complement
     checksum ^ 0xFFFF
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::{internet_checksum, ones_complement_add};
+
+    #[test]
+    fn test_ones_complement_add() {
+        assert_eq!(ones_complement_add(0xF000, 0x1009), 0x000A);
+    }
+
+    #[test]
+    fn test_internet_checksum() {
+        let bs: [u8; 20] = [
+            0x45, 0x00, 0x00, 0x5d, 0x36, 0x4d, 0x00, 0x00,
+            0x3c, 0x11, 0x36, 0xb5, 0x80, 0x82, 0x04, 0x03,
+            0x80, 0x82, 0x0c, 0x87,
+        ];
+        assert_eq!(internet_checksum(bs), 0xFFFF);
+    }
 }
